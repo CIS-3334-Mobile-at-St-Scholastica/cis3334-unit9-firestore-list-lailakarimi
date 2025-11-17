@@ -1,6 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart'; // already generated
 
-void main() => runApp(const MyApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  runApp(const MyApp());
+}
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -23,27 +32,32 @@ class ItemListApp extends StatefulWidget {
 }
 
 class _ItemListAppState extends State<ItemListApp> {
-  // Controller for the input field
   final TextEditingController _newItemTextField = TextEditingController();
 
-  // Local list of items (Phase 1: local; Phase 2: Firestore stream replaces this).
-  final List<String> _itemList = <String>[];
+  late final CollectionReference<Map<String, dynamic>> items;
 
-  // ACTION: add one item from the TextField to the local list.
-  void _addItem() {
-    final newItem = _newItemTextField.text.trim();
-    if (newItem.isEmpty) return;
-    setState(() {
-      _itemList.add(newItem);
-      _newItemTextField.clear();
-    });
+  @override
+  void initState() {
+    super.initState();
+    items = FirebaseFirestore.instance.collection('ITEMS');
   }
 
-  // ACTION: remove the item at the given index.
-  void _removeItemAt(int i) {
-    setState(() {
-      _itemList.removeAt(i); // remove item from list
+  // Add a new item to Firestore
+  Future<void> _addItem() async {
+    final newItem = _newItemTextField.text.trim();
+    if (newItem.isEmpty) return;
+
+    await items.add({
+      'item_name': newItem,
+      'createdAt': FieldValue.serverTimestamp(),
     });
+
+    _newItemTextField.clear();
+  }
+
+  // Remove an item from Firestore by document ID
+  Future<void> _removeItemAt(String id) async {
+    await items.doc(id).delete();
   }
 
   @override
@@ -57,7 +71,6 @@ class _ItemListAppState extends State<ItemListApp> {
             // ====== Item Input  ======
             Row(
               children: [
-                // ====== Item Name TextField ======
                 Expanded(
                   child: TextField(
                     controller: _newItemTextField,
@@ -68,29 +81,47 @@ class _ItemListAppState extends State<ItemListApp> {
                     ),
                   ),
                 ),
-                // ====== Spacer for formating ======
                 const SizedBox(width: 12),
-                // ====== Add Item Button ======
                 FilledButton(onPressed: _addItem, child: const Text('Add')),
               ],
             ),
-            // ====== Spacer for formating ======
             const SizedBox(height: 24),
+            // ====== Firestore Item List ======
             Expanded(
-              // ====== Item List ======
-              child: ListView.builder(
-                itemCount: _itemList.length,
-                itemBuilder: (context, i) => Dismissible(
-                  key: ValueKey(_itemList[i]),
-                  background: Container(color: Colors.red),
-                  onDismissed: (_) => _removeItemAt(i),
-                  // ====== Item Tile ======
-                  child: ListTile(
-                    leading: const Icon(Icons.check_box),
-                    title: Text(_itemList[i]),
-                    onTap: () => _removeItemAt(i),
-                  ),
-                ),
+              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: items.orderBy('createdAt', descending: true).snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    return const Center(child: Text('Error loading items'));
+                  }
+                  if (!snapshot.hasData) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  final docs = snapshot.data!.docs;
+                  if (docs.isEmpty) {
+                    return const Center(child: Text('No items yet. Tap + to add.'));
+                  }
+
+                  return ListView.builder(
+                    itemCount: docs.length,
+                    itemBuilder: (context, i) {
+                      final doc = docs[i];
+                      final name = doc.data()['item_name'] ?? 'Unnamed';
+
+                      return Dismissible(
+                        key: ValueKey(doc.id),
+                        background: Container(color: Colors.red),
+                        onDismissed: (_) => _removeItemAt(doc.id),
+                        child: ListTile(
+                          leading: const Icon(Icons.check_box),
+                          title: Text(name),
+                          onTap: () => _removeItemAt(doc.id),
+                        ),
+                      );
+                    },
+                  );
+                },
               ),
             ),
           ],
